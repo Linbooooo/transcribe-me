@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Transcribe Me</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="app-header">
+        <div>
+          <p class="eyebrow">Local AI transcription</p>
+          <h1>Transcribe Me</h1>
+        </div>
+        <div class="header-actions">
+          <div class="status-pill" id="connectionStatus">Offline</div>
+          <button
+            class="icon-button"
+            id="settingsButton"
+            type="button"
+            aria-label="Open cleanup settings"
+            aria-expanded="false"
+            aria-controls="settingsPanel"
+            title="Cleanup settings"
+          >
+            <svg aria-hidden="true" viewBox="0 0 24 24">
+              <path d="M12 15.5A3.5 3.5 0 1 0 12 8a3.5 3.5 0 0 0 0 7.5Z" />
+              <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 0 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 0 1-4 0v-.1a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.9.3l-.1.1A2 2 0 1 1 4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 0 1 0-4h.1a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.9L4.2 7A2 2 0 0 1 7 4.2l.1.1a1.7 1.7 0 0 0 1.9.3 1.7 1.7 0 0 0 1-1.5V3a2 2 0 0 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1A2 2 0 1 1 19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.5 1h.1a2 2 0 0 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z" />
+            </svg>
+          </button>
+        </div>
+      </header>
+
+      <section class="tool-section settings-panel" id="settingsPanel" aria-labelledby="settings-title" hidden>
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Settings</p>
+            <h2 id="settings-title">Cleanup Model</h2>
+          </div>
+        </div>
+
+        <div class="settings-grid">
+          <label class="model-field">
+            <span>Model</span>
+            <div class="model-row">
+              <input id="modelInput" name="model" list="modelOptions" autocomplete="off" />
+              <button class="ghost-button compact-button" id="refreshModelsButton" type="button">Refresh</button>
+            </div>
+            <datalist id="modelOptions"></datalist>
+            <small id="modelStatus">Checking models</small>
+          </label>
+          <label>
+            <span>OpenAI-compatible URL</span>
+            <input id="baseUrlInput" name="baseUrl" autocomplete="off" />
+          </label>
+          <label>
+            <span>API key</span>
+            <input id="apiKeyInput" name="apiKey" type="password" autocomplete="off" />
+          </label>
+        </div>
+
+        <label class="prompt-field">
+          <span>System prompt</span>
+          <textarea id="systemPrompt" spellcheck="true"></textarea>
+        </label>
+      </section>
+
+      <section class="tool-section record-section" aria-labelledby="record-title">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Section 1</p>
+            <h2 id="record-title">Record</h2>
+          </div>
+          <div class="meter" aria-hidden="true">
+            <span id="levelBar"></span>
+          </div>
+        </div>
+
+        <div class="record-actions">
+          <button class="primary-button" id="recordButton" type="button">Start recording</button>
+          <button class="ghost-button" id="discardButton" type="button">Clear transcript</button>
+        </div>
+
+        <div class="device-row">
+          <label>
+            <span>Microphone</span>
+            <select id="micSelect" name="microphone"></select>
+          </label>
+        </div>
+
+        <div class="record-meta">
+          <span id="recordingState">Idle</span>
+          <span id="timer">00:00</span>
+          <span id="chunkStatus">No audio sent</span>
+          <span id="micStatus">Default input</span>
+        </div>
+
+        <audio class="recording-preview" id="recordingPreview" controls hidden></audio>
+      </section>
+
+      <section class="tool-section transcript-section" aria-labelledby="transcript-title">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Section 2</p>
+            <h2 id="transcript-title">Transcript</h2>
+          </div>
+          <div class="transcript-actions">
+            <span id="wordCount">0 words</span>
+            <button class="secondary-button" id="cleanButton" type="button">Clean</button>
+          </div>
+        </div>
+        <textarea id="transcript" spellcheck="true" placeholder="Your transcript will appear here."></textarea>
+      </section>
+
+      <section class="tool-section cleaned-section" aria-labelledby="cleaned-title">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Section 3</p>
+            <h2 id="cleaned-title">Cleaned Transcript</h2>
+          </div>
+          <div class="cleaned-actions">
+            <span id="cleanStatus">Ready</span>
+            <button class="secondary-button copy-button" id="copyCleanedButton" type="button">
+              <svg aria-hidden="true" viewBox="0 0 24 24">
+                <path d="M8 8V5.5A1.5 1.5 0 0 1 9.5 4h9A1.5 1.5 0 0 1 20 5.5v9a1.5 1.5 0 0 1-1.5 1.5H16" />
+                <path d="M5.5 8h9A1.5 1.5 0 0 1 16 9.5v9a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 4 18.5v-9A1.5 1.5 0 0 1 5.5 8Z" />
+              </svg>
+              Copy
+            </button>
+          </div>
+        </div>
+
+        <textarea
+          id="cleanedTranscript"
+          spellcheck="true"
+          placeholder="Cleaned text will appear here after you press Clean."
+        ></textarea>
+      </section>
+    </main>
+
+    <script src="/static/app.js" type="module"></script>
+  </body>
+</html>
