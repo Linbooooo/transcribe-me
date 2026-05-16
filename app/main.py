@@ -19,12 +19,15 @@ from .transcriber import WhisperTranscriber
 APP_DIR = Path(__file__).resolve().parent
 STATIC_DIR = APP_DIR / "static"
 
-DEFAULT_SYSTEM_PROMPT = """Clean this transcript to proper writing without changing the speaker's meaning.
+DEFAULT_SYSTEM_PROMPT = """Clean this transcript into polished writing without changing the speaker's meaning.
 
 - Detect and fix possible transcription mistakes by context.
-- Remove filler words, redundant repeititons, and summarize when fit.
+- Remove filler words and redundant repetitions when they do not affect meaning.
+- Preserve the speaker's voice, wording, and first-person perspective.
 - Keep names, technical terms, numbers, and intent intact.
-- Return only the cleaned transcript."""
+- Return only the cleaned transcript.
+- Do not include an introduction, heading, markdown, notes, explanations, or a list of changes.
+- Do not say what you removed or changed."""
 
 
 class CleanRequest(BaseModel):
@@ -146,6 +149,13 @@ def extract_llm_error(response: httpx.Response, fallback: str) -> str:
     return response.text[:1000] or fallback
 
 
+def cleanup_messages(system_prompt: str, text: str) -> list[dict[str, str]]:
+    return [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": text},
+    ]
+
+
 async def model_not_found_detail(base_url: str, model_error: str, api_key: str | None = None) -> str:
     models = await available_llm_models(base_url, api_key)
     available = ", ".join(models) if models else "none detected"
@@ -165,10 +175,7 @@ async def clean_with_ollama_native(
     endpoint = f"{ollama_root_url(base_url)}/api/chat"
     payload: dict[str, Any] = {
         "model": model,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": text},
-        ],
+        "messages": cleanup_messages(system_prompt, text),
         "stream": False,
         "think": False,
         "options": {
@@ -302,10 +309,7 @@ async def clean_transcript(request: CleanRequest) -> CleanResponse:
 
     payload: dict[str, Any] = {
         "model": model,
-        "messages": [
-            {"role": "system", "content": request.system_prompt},
-            {"role": "user", "content": request.text},
-        ],
+        "messages": cleanup_messages(request.system_prompt, request.text),
         "temperature": 0.1,
         "max_tokens": default_llm_max_tokens(),
         "stream": False,
