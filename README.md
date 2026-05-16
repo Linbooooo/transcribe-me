@@ -1,8 +1,10 @@
 # Transcribe Me
 
-A small full-stack transcription tool with a one-page browser UI, FastAPI backend, local Whisper transcription after recording, and LLM cleanup through an OpenAI-compatible chat endpoint.
+A small full-stack transcription tool with a one-page browser UI, FastAPI backend, local Whisper transcription after recording stops, and LLM cleanup through an OpenAI-compatible chat endpoint.
 
 ## Run With Docker
+
+### Option 1: App Container + Ollama On Host
 
 ```bash
 docker compose up --build
@@ -18,6 +20,24 @@ ollama serve
 ```
 
 You can also use any OpenAI-compatible chat completions endpoint from the UI by changing the model, URL, and API key fields. The settings panel lists models visible from the configured endpoint when the provider supports model listing. For Ollama on port `11434`, cleanup uses Ollama's native chat API with thinking disabled so Qwen-style reasoning models return final text.
+
+### Option 2: App Container + Ollama Container
+
+Use this if the deployment machine does not already have Ollama installed:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.ollama.yml up --build
+```
+
+This starts three services:
+
+| Service | Purpose |
+| --- | --- |
+| `transcribe-me` | FastAPI app, static frontend, Whisper transcription |
+| `ollama` | Local LLM server listening on port `11434` |
+| `ollama-pull` | One-shot helper that pulls `LLM_MODEL`, default `llama3.2:3b` |
+
+Models are stored in the `ollama-data` Docker volume, so the model download is reused across restarts.
 
 ## Configuration
 
@@ -35,6 +55,7 @@ Environment variables:
 | `LLM_MODEL` | `llama3.2:3b` | Cleanup model name |
 | `LLM_MAX_TOKENS` | `2048` | Maximum cleanup response length |
 | `APP_PORT` | `8000` | Host port used by Docker Compose |
+| `OLLAMA_PORT` | `11434` | Host port used by the optional Ollama Compose service |
 
 ## Cleanup Model Choice
 

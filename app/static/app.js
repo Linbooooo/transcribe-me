@@ -5,6 +5,7 @@ const copyCleanedButton = document.querySelector("#copyCleanedButton");
 const settingsButton = document.querySelector("#settingsButton");
 const refreshModelsButton = document.querySelector("#refreshModelsButton");
 const settingsPanel = document.querySelector("#settingsPanel");
+
 const transcript = document.querySelector("#transcript");
 const cleanedTranscript = document.querySelector("#cleanedTranscript");
 const micSelect = document.querySelector("#micSelect");
@@ -17,6 +18,7 @@ const wordCount = document.querySelector("#wordCount");
 const cleanStatus = document.querySelector("#cleanStatus");
 const levelBar = document.querySelector("#levelBar");
 const recordingPreview = document.querySelector("#recordingPreview");
+
 const modelInput = document.querySelector("#modelInput");
 const modelOptions = document.querySelector("#modelOptions");
 const modelStatus = document.querySelector("#modelStatus");
@@ -24,27 +26,43 @@ const baseUrlInput = document.querySelector("#baseUrlInput");
 const apiKeyInput = document.querySelector("#apiKeyInput");
 const systemPrompt = document.querySelector("#systemPrompt");
 
-let mediaRecorder;
-let mediaStream;
-let recordedChunks = [];
-let audioContext;
-let analyser;
-let meterFrame;
-let startedAt = 0;
-let timerId;
-let isRecording = false;
-let lastPreviewUrl;
+const preferredAudioTypes = [
+  "audio/webm;codecs=opus",
+  "audio/webm",
+  "audio/ogg;codecs=opus",
+  "audio/mp4",
+];
+
+const state = {
+  audioChunks: [],
+  audioContext: null,
+  meterFrame: null,
+  previewUrl: null,
+  recorder: null,
+  stream: null,
+  timerId: null,
+  timerStartedAt: 0,
+};
 
 function setConnection(text, live = false) {
   connectionStatus.textContent = text;
   connectionStatus.classList.toggle("live", live);
 }
 
-function setRecording(active) {
-  isRecording = active;
-  recordButton.textContent = active ? "Stop recording" : "Start recording";
-  recordButton.classList.toggle("recording", active);
-  recordingState.textContent = active ? "Recording" : "Idle";
+function setRecordingUi(isRecording) {
+  recordButton.textContent = isRecording ? "Stop recording" : "Start recording";
+  recordButton.classList.toggle("recording", isRecording);
+  recordingState.textContent = isRecording ? "Recording" : "Idle";
+}
+
+function showRecordingStatus(text) {
+  chunkStatus.textContent = text;
+}
+
+function showError(error) {
+  recordingState.textContent = "Error";
+  showRecordingStatus(error.message || "Something went wrong");
+  setConnection("Ready", true);
 }
 
 function updateWordCount() {
@@ -52,21 +70,9 @@ function updateWordCount() {
   wordCount.textContent = `${words.length} ${words.length === 1 ? "word" : "words"}`;
 }
 
-function normalizeInsert(text) {
+function insertAtCursor(text) {
   const trimmed = text.trim();
   if (!trimmed) {
-    return "";
-  }
-
-  const start = transcript.selectionStart ?? transcript.value.length;
-  const before = transcript.value.slice(0, start);
-  const needsLeadingSpace = before.length > 0 && !/[\s\n]$/.test(before);
-  return `${needsLeadingSpace ? " " : ""}${trimmed} `;
-}
-
-function insertAtCursor(text) {
-  const insert = normalizeInsert(text);
-  if (!insert) {
     return;
   }
 
@@ -74,25 +80,61 @@ function insertAtCursor(text) {
   const end = transcript.selectionEnd ?? start;
   const before = transcript.value.slice(0, start);
   const after = transcript.value.slice(end);
+  const leadingSpace = before && !/[\s\n]$/.test(before) ? " " : "";
+  const insert = `${leadingSpace}${trimmed} `;
+
   transcript.value = `${before}${insert}${after}`;
-  const cursor = start + insert.length;
-  transcript.selectionStart = cursor;
-  transcript.selectionEnd = cursor;
+  transcript.selectionStart = start + insert.length;
+  transcript.selectionEnd = transcript.selectionStart;
   transcript.focus();
   updateWordCount();
 }
 
-function pickMimeType() {
-  const candidates = [
-    "audio/webm;codecs=opus",
-    "audio/webm",
-    "audio/ogg;codecs=opus",
-    "audio/mp4",
-  ];
-  return candidates.find((type) => MediaRecorder.isTypeSupported(type)) || "";
+function selectedMicLabel() {
+  return micSelect.selectedOptions[0]?.textContent || "Default microphone";
 }
 
-function extensionForMimeType(mimeType) {
+function selectedMicConstraints() {
+  const audio = {
+    echoCancellation: true,
+    noiseSuppression: true,
+    autoGainControl: true,
+  };
+
+  if (micSelect.value) {
+    audio.deviceId = { exact: micSelect.value };
+  }
+
+  return { audio };
+}
+
+async function loadMicrophones() {
+  if (!navigator.mediaDevices?.enumerateDevices) {
+    micSelect.replaceChildren(new Option("Default microphone", ""));
+    return;
+  }
+
+  const previous = micSelect.value;
+  const devices = await navigator.mediaDevices.enumerateDevices();
+  const microphones = devices.filter((device) => device.kind === "audioinput");
+  const options = [new Option("Default microphone", "")];
+
+  for (const [index, device] of microphones.entries()) {
+    options.push(new Option(device.label || `Microphone ${index + 1}`, device.deviceId));
+  }
+
+  micSelect.replaceChildren(...options);
+  if ([...micSelect.options].some((option) => option.value === previous)) {
+    micSelect.value = previous;
+  }
+  micStatus.textContent = selectedMicLabel();
+}
+
+function bestAudioType() {
+  return preferredAudioTypes.find((type) => MediaRecorder.isTypeSupported(type)) || "";
+}
+
+function fileExtensionFor(mimeType) {
   if (mimeType.includes("ogg")) {
     return "ogg";
   }
@@ -105,62 +147,24 @@ function extensionForMimeType(mimeType) {
   return "webm";
 }
 
-function selectedMicConstraints() {
-  const deviceId = micSelect.value;
-  const audio = {
-    echoCancellation: true,
-    noiseSuppression: true,
-    autoGainControl: true,
-  };
-
-  if (deviceId) {
-    audio.deviceId = { exact: deviceId };
-  }
-
-  return { audio };
-}
-
-async function loadMicrophones() {
-  if (!navigator.mediaDevices?.enumerateDevices) {
-    micSelect.innerHTML = '<option value="">Default microphone</option>';
-    return;
-  }
-
-  const previous = micSelect.value;
-  const devices = await navigator.mediaDevices.enumerateDevices();
-  const microphones = devices.filter((device) => device.kind === "audioinput");
-
-  micSelect.innerHTML = "";
-  const defaultOption = new Option("Default microphone", "");
-  micSelect.append(defaultOption);
-
-  for (const [index, device] of microphones.entries()) {
-    const label = device.label || `Microphone ${index + 1}`;
-    micSelect.append(new Option(label, device.deviceId));
-  }
-
-  if ([...micSelect.options].some((option) => option.value === previous)) {
-    micSelect.value = previous;
-  }
-}
-
-function selectedMicLabel() {
-  return micSelect.selectedOptions[0]?.textContent || "Default microphone";
+function isRecording() {
+  return state.recorder?.state === "recording";
 }
 
 function startTimer() {
-  startedAt = Date.now();
+  state.timerStartedAt = Date.now();
   timer.textContent = "00:00";
-  timerId = window.setInterval(() => {
-    const elapsed = Math.floor((Date.now() - startedAt) / 1000);
-    const minutes = String(Math.floor(elapsed / 60)).padStart(2, "0");
-    const seconds = String(elapsed % 60).padStart(2, "0");
+  state.timerId = window.setInterval(() => {
+    const elapsedSeconds = Math.floor((Date.now() - state.timerStartedAt) / 1000);
+    const minutes = String(Math.floor(elapsedSeconds / 60)).padStart(2, "0");
+    const seconds = String(elapsedSeconds % 60).padStart(2, "0");
     timer.textContent = `${minutes}:${seconds}`;
   }, 250);
 }
 
 function stopTimer() {
-  window.clearInterval(timerId);
+  window.clearInterval(state.timerId);
+  state.timerId = null;
 }
 
 function startMeter(stream) {
@@ -169,27 +173,40 @@ function startMeter(stream) {
     return;
   }
 
-  audioContext = new AudioContextClass();
-  const source = audioContext.createMediaStreamSource(stream);
-  analyser = audioContext.createAnalyser();
+  state.audioContext = new AudioContextClass();
+  const source = state.audioContext.createMediaStreamSource(stream);
+  const analyser = state.audioContext.createAnalyser();
+
   analyser.fftSize = 256;
+  const frequencyData = new Uint8Array(analyser.frequencyBinCount);
   source.connect(analyser);
 
-  const data = new Uint8Array(analyser.frequencyBinCount);
   const draw = () => {
-    analyser.getByteFrequencyData(data);
-    const average = data.reduce((sum, value) => sum + value, 0) / data.length;
+    analyser.getByteFrequencyData(frequencyData);
+    const average = frequencyData.reduce((sum, value) => sum + value, 0) / frequencyData.length;
     levelBar.style.transform = `scaleX(${Math.min(1, average / 90)})`;
-    meterFrame = window.requestAnimationFrame(draw);
+    state.meterFrame = window.requestAnimationFrame(draw);
   };
   draw();
 }
 
 function stopMeter() {
-  window.cancelAnimationFrame(meterFrame);
+  window.cancelAnimationFrame(state.meterFrame);
   levelBar.style.transform = "scaleX(0)";
-  audioContext?.close().catch(() => {});
-  audioContext = undefined;
+  state.audioContext?.close().catch(() => {});
+  state.audioContext = null;
+  state.meterFrame = null;
+}
+
+function releaseMicrophone() {
+  state.stream?.getTracks().forEach((track) => track.stop());
+  state.stream = null;
+}
+
+function resetRecordingTools() {
+  stopMeter();
+  stopTimer();
+  releaseMicrophone();
 }
 
 async function startRecording() {
@@ -197,58 +214,65 @@ async function startRecording() {
     throw new Error("Recording is not supported in this browser.");
   }
 
-  mediaStream = await navigator.mediaDevices.getUserMedia(selectedMicConstraints());
+  state.stream = await navigator.mediaDevices.getUserMedia(selectedMicConstraints());
   await loadMicrophones();
-  micStatus.textContent = selectedMicLabel();
 
-  const mimeType = pickMimeType();
-  mediaRecorder = new MediaRecorder(mediaStream, mimeType ? { mimeType } : undefined);
-  recordedChunks = [];
-
-  mediaRecorder.addEventListener("dataavailable", (event) => {
-    if (event.data.size > 0) {
-      recordedChunks.push(event.data);
+  const mimeType = bestAudioType();
+  state.audioChunks = [];
+  state.recorder = new MediaRecorder(state.stream, mimeType ? { mimeType } : undefined);
+  state.recorder.addEventListener("dataavailable", (event) => {
+    if (event.data.size) {
+      state.audioChunks.push(event.data);
     }
   });
 
-  mediaRecorder.start();
-  startMeter(mediaStream);
+  state.recorder.start();
+  startMeter(state.stream);
   startTimer();
-  setRecording(true);
+  setRecordingUi(true);
   setConnection("Recording", true);
-  chunkStatus.textContent = "Recording audio";
+  showRecordingStatus("Recording audio");
   recordingPreview.hidden = true;
 }
 
-function collectRecording() {
+function stopRecorder() {
   return new Promise((resolve, reject) => {
-    if (!mediaRecorder || mediaRecorder.state !== "recording") {
+    if (!isRecording()) {
       reject(new Error("No active recording."));
       return;
     }
 
-    mediaRecorder.addEventListener(
+    state.recorder.addEventListener(
       "stop",
       () => {
-        const mimeType = mediaRecorder.mimeType || recordedChunks[0]?.type || "audio/webm";
-        const blob = new Blob(recordedChunks, { type: mimeType });
-        resolve(blob);
+        const mimeType = state.recorder.mimeType || state.audioChunks[0]?.type || "audio/webm";
+        resolve(new Blob(state.audioChunks, { type: mimeType }));
       },
       { once: true },
     );
 
-    mediaRecorder.requestData();
-    mediaRecorder.stop();
+    state.recorder.requestData();
+    state.recorder.stop();
   });
 }
 
-async function uploadRecording(blob) {
+function showRecordingPreview(blob) {
+  if (state.previewUrl) {
+    URL.revokeObjectURL(state.previewUrl);
+  }
+
+  state.previewUrl = URL.createObjectURL(blob);
+  recordingPreview.src = state.previewUrl;
+  recordingPreview.hidden = false;
+}
+
+async function transcribeRecording(blob) {
   if (!blob.size) {
     throw new Error("No audio was recorded.");
   }
 
   const formData = new FormData();
-  const extension = extensionForMimeType(blob.type || "audio/webm");
+  const extension = fileExtensionFor(blob.type || "audio/webm");
   formData.append("file", blob, `recording.${extension}`);
 
   const response = await fetch("/api/transcribe", {
@@ -264,72 +288,44 @@ async function uploadRecording(blob) {
   return payload.text || "";
 }
 
-function showRecordingPreview(blob) {
-  if (lastPreviewUrl) {
-    URL.revokeObjectURL(lastPreviewUrl);
-  }
-
-  lastPreviewUrl = URL.createObjectURL(blob);
-  recordingPreview.src = lastPreviewUrl;
-  recordingPreview.hidden = false;
-}
-
 async function stopRecording() {
-  setRecording(false);
-  recordButton.disabled = true;
-  chunkStatus.textContent = "Preparing audio";
+  setRecordingUi(false);
+  showRecordingStatus("Preparing audio");
 
-  try {
-    const blob = await collectRecording();
-    showRecordingPreview(blob);
-    stopMeter();
-    stopTimer();
-    mediaStream?.getTracks().forEach((track) => track.stop());
-    mediaStream = undefined;
+  const blob = await stopRecorder();
+  resetRecordingTools();
+  showRecordingPreview(blob);
 
-    chunkStatus.textContent = `Transcribing ${Math.round(blob.size / 1024)} KB audio`;
-    const text = await uploadRecording(blob);
+  showRecordingStatus(`Transcribing ${Math.round(blob.size / 1024)} KB audio`);
+  const text = await transcribeRecording(blob);
 
-    if (text.trim()) {
-      insertAtCursor(text);
-      chunkStatus.textContent = "Transcript updated";
-    } else {
-      chunkStatus.textContent = "No speech found";
-    }
-  } catch (error) {
-    recordingState.textContent = "Error";
-    chunkStatus.textContent = error.message;
-  } finally {
-    recordButton.disabled = false;
-    setConnection("Ready", true);
+  if (text.trim()) {
+    insertAtCursor(text);
+    showRecordingStatus("Transcript updated");
+  } else {
+    showRecordingStatus("No speech found");
   }
 }
 
 async function toggleRecording() {
   recordButton.disabled = true;
+
   try {
-    if (isRecording) {
+    if (isRecording()) {
       await stopRecording();
     } else {
       await startRecording();
     }
   } catch (error) {
-    recordingState.textContent = "Error";
-    chunkStatus.textContent = error.message;
-    setRecording(false);
-    setConnection("Ready", true);
+    resetRecordingTools();
+    setRecordingUi(false);
+    showError(error);
   } finally {
     recordButton.disabled = false;
+    if (!isRecording()) {
+      setConnection("Ready", true);
+    }
   }
-}
-
-async function loadSettings() {
-  const response = await fetch("/api/settings");
-  const settings = await response.json();
-  modelInput.value = settings.llm_model;
-  baseUrlInput.value = settings.llm_base_url;
-  systemPrompt.value = settings.system_prompt;
-  await loadModels();
 }
 
 function describeModels(models) {
@@ -354,9 +350,8 @@ async function loadModels() {
 
   try {
     const params = new URLSearchParams();
-    const baseUrl = baseUrlInput.value.trim();
-    if (baseUrl) {
-      params.set("base_url", baseUrl);
+    if (baseUrlInput.value.trim()) {
+      params.set("base_url", baseUrlInput.value.trim());
     }
 
     const response = await fetch(`/api/llm-models?${params.toString()}`);
@@ -365,17 +360,27 @@ async function loadModels() {
       throw new Error(payload.detail || "Could not list models");
     }
 
-    modelOptions.innerHTML = "";
-    for (const model of payload.models || []) {
-      const option = document.createElement("option");
-      option.value = model;
-      modelOptions.append(option);
-    }
-
+    modelOptions.replaceChildren(
+      ...(payload.models || []).map((model) => {
+        const option = document.createElement("option");
+        option.value = model;
+        return option;
+      }),
+    );
     modelStatus.textContent = describeModels(payload.models || []);
   } catch (error) {
     modelStatus.textContent = error.message;
   }
+}
+
+async function loadSettings() {
+  const response = await fetch("/api/settings");
+  const settings = await response.json();
+
+  modelInput.value = settings.llm_model;
+  baseUrlInput.value = settings.llm_base_url;
+  systemPrompt.value = settings.system_prompt;
+  await loadModels();
 }
 
 async function cleanTranscript() {
@@ -400,8 +405,8 @@ async function cleanTranscript() {
         system_prompt: systemPrompt.value.trim(),
       }),
     });
-
     const payload = await response.json();
+
     if (!response.ok) {
       throw new Error(payload.detail || "Cleanup failed");
     }
@@ -422,6 +427,7 @@ function toggleSettings() {
   const willOpen = settingsPanel.hidden;
   settingsPanel.hidden = !willOpen;
   settingsButton.setAttribute("aria-expanded", String(willOpen));
+
   if (willOpen) {
     loadModels().catch((error) => {
       modelStatus.textContent = error.message;
@@ -430,8 +436,7 @@ function toggleSettings() {
 }
 
 async function copyCleanedTranscript() {
-  const text = cleanedTranscript.value.trim();
-  if (!text) {
+  if (!cleanedTranscript.value.trim()) {
     cleanStatus.textContent = "No cleaned text";
     return;
   }
@@ -446,40 +451,40 @@ async function copyCleanedTranscript() {
   }
 }
 
-recordButton.addEventListener("click", toggleRecording);
-cleanButton.addEventListener("click", cleanTranscript);
-copyCleanedButton.addEventListener("click", copyCleanedTranscript);
-settingsButton.addEventListener("click", toggleSettings);
-refreshModelsButton.addEventListener("click", () => {
-  loadModels().catch((error) => {
-    modelStatus.textContent = error.message;
-  });
-});
-baseUrlInput.addEventListener("change", () => {
-  loadModels().catch((error) => {
-    modelStatus.textContent = error.message;
-  });
-});
-micSelect.addEventListener("change", () => {
-  micStatus.textContent = selectedMicLabel();
-});
-discardButton.addEventListener("click", () => {
+function clearText() {
   transcript.value = "";
   cleanedTranscript.value = "";
   transcript.focus();
   updateWordCount();
   cleanStatus.textContent = "Ready";
-});
+}
+
+function refreshModels() {
+  loadModels().catch((error) => {
+    modelStatus.textContent = error.message;
+  });
+}
+
+recordButton.addEventListener("click", toggleRecording);
+discardButton.addEventListener("click", clearText);
+cleanButton.addEventListener("click", cleanTranscript);
+copyCleanedButton.addEventListener("click", copyCleanedTranscript);
+settingsButton.addEventListener("click", toggleSettings);
+refreshModelsButton.addEventListener("click", refreshModels);
+baseUrlInput.addEventListener("change", refreshModels);
 transcript.addEventListener("input", updateWordCount);
+micSelect.addEventListener("change", () => {
+  micStatus.textContent = selectedMicLabel();
+});
+navigator.mediaDevices?.addEventListener?.("devicechange", () => {
+  loadMicrophones().catch(() => {});
+});
 
 loadSettings().catch((error) => {
   cleanStatus.textContent = error.message;
 });
 loadMicrophones().catch(() => {
-  micSelect.innerHTML = '<option value="">Default microphone</option>';
-});
-navigator.mediaDevices?.addEventListener?.("devicechange", () => {
-  loadMicrophones().catch(() => {});
+  micSelect.replaceChildren(new Option("Default microphone", ""));
 });
 setConnection("Ready", true);
 updateWordCount();

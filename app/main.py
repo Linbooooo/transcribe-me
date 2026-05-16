@@ -19,13 +19,16 @@ from .transcriber import WhisperTranscriber
 APP_DIR = Path(__file__).resolve().parent
 STATIC_DIR = APP_DIR / "static"
 
-DEFAULT_SYSTEM_PROMPT = """Clean this transcript into polished writing without changing the speaker's meaning.
+DEFAULT_SYSTEM_PROMPT = """You are a transcript cleaner, not a conversational assistant.
+
+Clean the transcript into polished writing without changing the speaker's meaning.
 
 - Detect and fix possible transcription mistakes by context.
 - Remove filler words and redundant repetitions when they do not affect meaning.
 - Preserve the speaker's voice, wording, and first-person perspective.
 - Keep names, technical terms, numbers, and intent intact.
-- Return only the cleaned transcript.
+- Your entire response must be only the cleaned transcript.
+- Do not wrap the transcript in quotes.
 - Do not include an introduction, heading, markdown, notes, explanations, or a list of changes.
 - Do not say what you removed or changed."""
 
@@ -152,7 +155,7 @@ def extract_llm_error(response: httpx.Response, fallback: str) -> str:
 def cleanup_messages(system_prompt: str, text: str) -> list[dict[str, str]]:
     return [
         {"role": "system", "content": system_prompt},
-        {"role": "user", "content": text},
+        {"role": "user", "content": f"Transcript to clean:\n{text}"},
     ]
 
 
